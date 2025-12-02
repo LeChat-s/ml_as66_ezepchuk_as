@@ -1,250 +1,246 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-import warnings
-warnings.filterwarnings('ignore')
 
-a, b, c, d = 0.4, 0.4, 0.08, 0.4
+a = 0.4
+b = 0.4
+c = 0.08
+d = 0.4
 n_inputs = 6
 n_hidden = 2
-n_outputs = 1
-network_type = "Элмана"
 
-def generate_sequence(n_points, a, b, c, d):
-    x = np.zeros(n_points)
-    for t in range(2, n_points):
-        value = a * x[t-1] + b * x[t-1] * x[t-2] + c * x[t-2]**3 + d
-        if abs(value) > 100:  # Ограничиваем рост значений
-            value = np.sign(value) * 100
-        x[t] = value
-    noise = np.random.normal(0, 0.02, n_points)
-    return x + noise
+print("="*70)
+print("ЛАБОРАТОРНАЯ РАБОТА 6: РЕКУРРЕНТНАЯ СЕТЬ ЭЛМАНА")
+print(f"Вариант №4: a={a}, b={b}, c={c}, d={d}")
+print("="*70)
 
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+def target_function(t):
+    return a * np.cos(b * t) + c * np.sin(d * t)
 
-def sigmoid_derivative(x):
-    return x * (1 - x)
+t = np.linspace(-100, 300, 4000)
+series = target_function(t)
 
-def linear(x):
-    return x
+def create_dataset(data, n_inputs):
+    X, y = [], []
+    for i in range(len(data) - n_inputs):
+        X.append(data[i:i + n_inputs])
+        y.append(data[i + n_inputs])
+    return np.array(X), np.array(y)
 
-def linear_derivative(x):
-    return 1
+X, y = create_dataset(series, n_inputs)
+
+start_train_idx = np.where(t >= 50)[0][0] - n_inputs
+end_train_idx = np.where(t <= 100)[0][-1] - n_inputs
+start_test_idx = np.where(t >= 100)[0][0] - n_inputs
+end_test_idx = np.where(t <= 150)[0][-1] - n_inputs
+
+X_train = X[start_train_idx:end_train_idx]
+y_train = y[start_train_idx:end_train_idx]
+X_test = X[start_test_idx:end_test_idx]
+y_test = y[start_test_idx:end_test_idx]
 
 class ElmanRNN:
-    def __init__(self, n_inputs, n_hidden, n_outputs):
-        self.W_ih = np.random.randn(n_inputs, n_hidden) * 0.1
-        self.W_hh = np.random.randn(n_hidden, n_hidden) * 0.1
-        self.W_ho = np.random.randn(n_hidden, n_outputs) * 0.1
-        self.b_h = np.zeros((1, n_hidden))
-        self.b_o = np.zeros((1, n_outputs))
-        self.context = np.zeros((1, n_hidden))
-        self.hidden_states = []
-        self.context_states = []
-        
-    def forward(self, X):
-        hidden_input = np.dot(X, self.W_ih) + np.dot(self.context, self.W_hh) + self.b_h
-        self.hidden = sigmoid(hidden_input)
+    def __init__(self, input_size, hidden_size, output_size):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+
+        self.W_ih = np.random.randn(hidden_size, input_size) * 0.1
+        self.W_hh = np.random.randn(hidden_size, hidden_size) * 0.1
+        self.W_ho = np.random.randn(output_size, hidden_size) * 0.1
+
+        self.b_h = np.zeros((hidden_size, 1))
+        self.b_o = np.zeros((output_size, 1))
+
+        self.context = np.zeros((hidden_size, 1))
+
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def sigmoid_derivative(self, x):
+        return x * (1 - x)
+
+    def forward(self, inputs):
+        self.inputs = inputs.reshape(-1, 1)
+
+        hidden_input = (self.W_ih @ self.inputs +
+                       self.W_hh @ self.context +
+                       self.b_h)
+        self.hidden = self.sigmoid(hidden_input)
+
         self.context = self.hidden.copy()
-        output = linear(np.dot(self.hidden, self.W_ho) + self.b_o)
-        self.hidden_states.append(self.hidden.copy())
-        self.context_states.append(self.context.copy())
-        return output
-    
-    def backward(self, X, y, output, learning_rate):
-        error = y - output
-        delta_output = error * linear_derivative(output)
-        hidden_error = delta_output.dot(self.W_ho.T)
-        delta_hidden = hidden_error * sigmoid_derivative(self.hidden)
-        self.W_ho += self.hidden.T.dot(delta_output) * learning_rate
-        self.W_ih += X.T.dot(delta_hidden) * learning_rate
-        if len(self.context_states) > 1:
-            context_grad = self.context_states[-2].T.dot(delta_hidden)
-            self.W_hh += context_grad * learning_rate
-        self.b_o += np.sum(delta_output, axis=0, keepdims=True) * learning_rate
-        self.b_h += np.sum(delta_hidden, axis=0, keepdims=True) * learning_rate
-        return np.mean(error**2)
-    
-    def train(self, X_train, y_train, epochs, learning_rate):
-        errors = []
-        for epoch in range(epochs):
-            epoch_error = 0
-            self.context = np.zeros((1, n_hidden))
-            self.hidden_states = []
-            self.context_states = []
-            for i in range(len(X_train)):
-                X_i = X_train[i:i+1]
-                y_i = y_train[i:i+1]
-                output = self.forward(X_i)
-                error = self.backward(X_i, y_i, output, learning_rate)
-                epoch_error += error
-            avg_error = epoch_error / len(X_train)
-            errors.append(avg_error)
-            if epoch % 100 == 0:
-                print(f"Эпоха {epoch}, Ошибка: {avg_error:.6f}")
-        return errors
-    
-    def predict(self, X_test):
-        predictions = []
-        self.context = np.zeros((1, n_hidden))
-        self.hidden_states = []
-        self.context_states = []
-        for i in range(len(X_test)):
-            X_i = X_test[i:i+1]
-            output = self.forward(X_i)
-            predictions.append(output[0, 0])
-        return np.array(predictions)
 
-def prepare_data(sequence, n_inputs):
-    X, y = [], []
-    for i in range(len(sequence) - n_inputs):
-        X.append(sequence[i:i+n_inputs])
-        y.append(sequence[i+n_inputs])
-    return np.array(X), np.array(y).reshape(-1, 1)
+        output_input = self.W_ho @ self.hidden + self.b_o
+        self.output = output_input
 
-def main():
-    print("=" * 60)
-    print(f"ЛАБОРАТОРНАЯ РАБОТА: РЕКУРРЕНТНЫЕ НЕЙРОННЫЕ СЕТИ")
-    print(f"Вариант 4: a={a}, b={b}, c={c}, d={d}")
-    print(f"Тип РНС: {network_type}")
-    print(f"Входов: {n_inputs}, Нейронов в скрытом слое: {n_hidden}")
-    print("=" * 60)
-    
-    np.random.seed(42)
-    n_total = 200  # Уменьшим количество точек
-    sequence = generate_sequence(n_total, a, b, c, d)
-    
-    # Проверим наличие бесконечных значений
-    print(f"Максимальное значение в ряде: {np.max(sequence):.4f}")
-    print(f"Минимальное значение в ряде: {np.min(sequence):.4f}")
-    print(f"Есть ли бесконечные значения: {np.any(np.isinf(sequence))}")
-    
-    scaler = MinMaxScaler()
-    sequence_norm = scaler.fit_transform(sequence.reshape(-1, 1)).flatten()
-    
-    train_size = int(0.7 * n_total)
-    train_seq = sequence_norm[:train_size]
-    test_seq = sequence_norm[train_size:]
-    
-    X_train, y_train = prepare_data(train_seq, n_inputs)
-    X_test, y_test = prepare_data(test_seq, n_inputs)
-    
-    print(f"Размер обучающей выборки: {len(X_train)}")
-    print(f"Размер тестовой выборки: {len(X_test)}")
-    
-    learning_rates = [0.01, 0.05, 0.1, 0.2]
-    best_model = None
-    best_error = float('inf')
-    best_lr = 0
-    
-    results = {}
-    
-    for lr in learning_rates:
-        print(f"\n{'='*40}")
-        print(f"Обучение с learning_rate = {lr}")
-        print('='*40)
-        
-        model = ElmanRNN(n_inputs, n_hidden, n_outputs)
-        errors = model.train(X_train, y_train, epochs=300, learning_rate=lr)
-        
-        train_predictions = model.predict(X_train)
-        
-        y_train_orig = scaler.inverse_transform(y_train.reshape(-1, 1)).flatten()
-        train_pred_orig = scaler.inverse_transform(train_predictions.reshape(-1, 1)).flatten()
-        
-        mse = mean_squared_error(y_train_orig, train_pred_orig)
-        mae = mean_absolute_error(y_train_orig, train_pred_orig)
-        
-        print(f"MSE: {mse:.6f}, MAE: {mae:.6f}")
-        
-        results[lr] = {
-            'model': model,
-            'errors': errors,
-            'mse': mse,
-            'mae': mae,
-            'predictions': train_pred_orig,
-            'train_predictions_norm': train_predictions
-        }
-        
-        if mse < best_error:
-            best_error = mse
-            best_model = model
-            best_lr = lr
-    
-    print(f"\n{'='*60}")
-    print(f"ЛУЧШАЯ МОДЕЛЬ: learning_rate = {best_lr}, MSE = {best_error:.6f}")
-    print('='*60)
-    
-    test_predictions_norm = best_model.predict(X_test)
-    
-    y_test_orig = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-    test_pred_orig = scaler.inverse_transform(test_predictions_norm.reshape(-1, 1)).flatten()
-    
-    plt.figure(figsize=(15, 10))
-    
-    plt.subplot(2, 2, 1)
-    plt.plot(y_train_orig, label='Эталонные значения', linewidth=2)
-    plt.plot(results[best_lr]['predictions'], label='Прогноз сети', linestyle='--', linewidth=2)
-    plt.title(f'Прогнозирование на обучающей выборке\nСеть {network_type}, α={best_lr}', fontsize=12, fontweight='bold')
-    plt.xlabel('Временной шаг')
-    plt.ylabel('Значение')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.subplot(2, 2, 2)
-    plt.plot(results[best_lr]['errors'], color='red', linewidth=2)
-    plt.title('Изменение ошибки в процессе обучения', fontsize=12, fontweight='bold')
-    plt.xlabel('Эпоха')
-    plt.ylabel('Ошибка (MSE)')
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    
-    plt.subplot(2, 2, 3)
-    plt.plot(y_test_orig, label='Эталонные значения', linewidth=2)
-    plt.plot(test_pred_orig, label='Прогноз сети', linestyle='--', linewidth=2)
-    plt.title(f'Прогнозирование на тестовой выборке\nСеть {network_type}', fontsize=12, fontweight='bold')
-    plt.xlabel('Временной шаг')
-    plt.ylabel('Значение')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.subplot(2, 2, 4)
-    for lr, data in results.items():
-        plt.plot(data['errors'][:100], label=f'α={lr}')
-    plt.title('Сравнение скорости обучения\nдля разных learning_rate', fontsize=12, fontweight='bold')
-    plt.xlabel('Эпоха (первые 100)')
-    plt.ylabel('Ошибка')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('elman_rnn_results.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    
-    print("\n" + "="*60)
-    print("РЕЗУЛЬТАТЫ ОБУЧЕНИЯ (первые 20 значений)")
-    print("="*60)
-    
-    train_results = pd.DataFrame({
-        'Эталонное значение': y_train_orig[:20],
-        'Полученное значение': results[best_lr]['predictions'][:20],
-        'Отклонение': np.abs(y_train_orig[:20] - results[best_lr]['predictions'][:20])
-    })
-    print(train_results.to_string(float_format="%.6f"))
-    
-    print("\n" + "="*60)
-    print("РЕЗУЛЬТАТЫ ПРОГНОЗИРОВАНИЯ (первые 20 значений)")
-    print("="*60)
-    
-    test_results = pd.DataFrame({
-        'Эталонное значение': y_test_orig[:20],
-        'Полученное значение': test_pred_orig[:20],
-        'Отклонение': np.abs(y_test_orig[:20] - test_pred_orig[:20])
-    })
-    print(test_results.to_string(float_format="%.6f"))
+        return self.output
 
-if __name__ == "__main__":
-    main()
+    def backward(self, target, learning_rate=0.01):
+        output_error = self.output - target
+
+        dW_ho = output_error @ self.hidden.T
+        db_o = output_error
+
+        hidden_error = (self.W_ho.T @ output_error) * self.sigmoid_derivative(self.hidden)
+
+        dW_ih = hidden_error @ self.inputs.T
+        dW_hh = hidden_error @ self.context.T
+        db_h = hidden_error
+
+        self.W_ho -= learning_rate * dW_ho
+        self.W_ih -= learning_rate * dW_ih
+        self.W_hh -= learning_rate * dW_hh
+        self.b_o -= learning_rate * db_o
+        self.b_h -= learning_rate * db_h
+
+        return np.mean(output_error**2)
+
+rnn = ElmanRNN(n_inputs, n_hidden, 1)
+
+epochs = 1000
+train_errors = []
+test_errors = []
+
+print("\nНачало обучения...")
+for epoch in range(epochs):
+    epoch_train_error = 0
+    epoch_test_error = 0
+
+    for i in range(len(X_train)):
+        rnn.context = np.zeros((n_hidden, 1))
+        output = rnn.forward(X_train[i])
+        error = rnn.backward(np.array([[y_train[i]]]), 0.1)
+        epoch_train_error += error
+
+    rnn.context = np.zeros((n_hidden, 1))
+    for i in range(len(X_test)):
+        output = rnn.forward(X_test[i])
+        error = np.mean((output - y_test[i])**2)
+        epoch_test_error += error
+
+    avg_train_error = epoch_train_error / len(X_train)
+    avg_test_error = epoch_test_error / len(X_test)
+    train_errors.append(avg_train_error)
+    test_errors.append(avg_test_error)
+
+    if epoch % 100 == 0:
+        print(f"Эпоха {epoch}: train error = {avg_train_error:.6f}, test error = {avg_test_error:.6f}")
+
+print("Обучение завершено!")
+
+t_train_plot = t[start_train_idx + n_inputs:end_train_idx + n_inputs]
+t_test_plot = t[start_test_idx + n_inputs:end_test_idx + n_inputs]
+
+train_predictions = []
+for i in range(len(X_train)):
+    rnn.context = np.zeros((n_hidden, 1))
+    pred = rnn.forward(X_train[i])[0, 0]
+    train_predictions.append(pred)
+
+test_predictions = []
+for i in range(len(X_test)):
+    rnn.context = np.zeros((n_hidden, 1))
+    pred = rnn.forward(X_test[i])[0, 0]
+    test_predictions.append(pred)
+
+train_predictions = np.array(train_predictions)
+test_predictions = np.array(test_predictions)
+
+plt.figure(figsize=(16, 10))
+
+plt.subplot(2, 2, 1)
+plt.plot(t_train_plot, y_train, 'b-', label='Эталон', linewidth=1.5)
+plt.plot(t_train_plot, train_predictions, 'r--', label='Прогноз РНС', linewidth=1.5)
+plt.title('График прогнозируемой функции на участке обучения (50-100)')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.legend()
+plt.grid(True)
+plt.xlim(50, 100)
+
+plt.subplot(2, 2, 2)
+plt.plot(train_errors, 'b-', label='Ошибка обучения', linewidth=1.5)
+plt.plot(test_errors, 'r-', label='Ошибка тестирования', linewidth=1.5)
+plt.title('Изменение ошибки в зависимости от итерации')
+plt.xlabel('Итерация')
+plt.ylabel('Ошибка MSE')
+plt.legend()
+plt.grid(True)
+plt.yscale('log')
+
+plt.subplot(2, 2, 3)
+plt.plot(t_test_plot, y_test, 'b-', label='Эталон', linewidth=1.5)
+plt.plot(t_test_plot, test_predictions, 'r--', label='Прогноз РНС', linewidth=1.5)
+plt.title('Результаты прогнозирования на тестовой выборке (100-150)')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.legend()
+plt.grid(True)
+plt.xlim(100, 150)
+
+plt.subplot(2, 2, 4)
+plt.scatter(y_test, test_predictions, alpha=0.6, s=20)
+y_min = min(y_test.min(), test_predictions.min())
+y_max = max(y_test.max(), test_predictions.max())
+plt.plot([y_min, y_max], [y_min, y_max], 'k--', lw=2)
+plt.title('Сравнение эталонных и прогнозируемых значений')
+plt.xlabel('Эталонные значения')
+plt.ylabel('Прогнозируемые значения')
+plt.grid(True)
+
+plt.tight_layout(pad=3.0)
+plt.show()
+
+train_results = []
+for i in range(min(20, len(X_train))):
+    rnn.context = np.zeros((n_hidden, 1))
+    pred = rnn.forward(X_train[i])[0, 0]
+    target = y_train[i]
+    deviation = target - pred
+    train_results.append([target, pred, deviation])
+
+test_results = []
+for i in range(min(20, len(X_test))):
+    rnn.context = np.zeros((n_hidden, 1))
+    pred = rnn.forward(X_test[i])[0, 0]
+    target = y_test[i]
+    deviation = target - pred
+    test_results.append([target, pred, deviation])
+
+train_df = pd.DataFrame(train_results, columns=['Эталонное значение', 'Полученное значение', 'Отклонение'])
+test_df = pd.DataFrame(test_results, columns=['Эталонное значение', 'Полученное значение', 'Отклонение'])
+
+print("\n" + "="*70)
+print("РЕЗУЛЬТАТЫ ОБУЧЕНИЯ (первые 20 значений)")
+print("="*70)
+print(train_df.round(6).to_string(index=False))
+
+print("\n" + "="*70)
+print("РЕЗУЛЬТАТЫ ПРОГНОЗИРОВАНИЯ (первые 20 значений)")
+print("="*70)
+print(test_df.round(6).to_string(index=False))
+
+train_mae = np.mean(np.abs(train_df['Отклонение']))
+train_mse = np.mean(train_df['Отклонение']**2)
+train_rmse = np.sqrt(train_mse)
+train_max_err = np.max(np.abs(train_df['Отклонение']))
+
+test_mae = np.mean(np.abs(test_df['Отклонение']))
+test_mse = np.mean(test_df['Отклонение']**2)
+test_rmse = np.sqrt(test_mse)
+test_max_err = np.max(np.abs(test_df['Отклонение']))
+
+print("\n" + "="*70)
+print("СТАТИСТИКА ОШИБОК")
+print("="*70)
+print(f"Обучение:")
+print(f"  MAE:  {train_mae:.6f}")
+print(f"  MSE:  {train_mse:.6f}")
+print(f"  RMSE: {train_rmse:.6f}")
+print(f"  Max:  {train_max_err:.6f}")
+
+print(f"\nТестирование:")
+print(f"  MAE:  {test_mae:.6f}")
+print(f"  MSE:  {test_mse:.6f}")
+print(f"  RMSE: {test_rmse:.6f}")
+print(f"  Max:  {test_max_err:.6f}")
